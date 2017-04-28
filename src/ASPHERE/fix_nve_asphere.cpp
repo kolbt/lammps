@@ -30,7 +30,7 @@
 using namespace LAMMPS_NS;
 using namespace FixConst;
 
-#define INERTIA 0.2          // moment of inertia prefactor for ellipsoid
+#define INERTIA 0.4          // moment of inertia prefactor for ellipsoid
 
 /* ---------------------------------------------------------------------- */
 
@@ -64,8 +64,8 @@ void FixNVEAsphere::init()
 
 void FixNVEAsphere::initial_integrate(int vflag)
 {
-  double dtfm;
-  double inertia[3],omega[3];
+  double dtfm,dtirotate;
+  double inertia[3];
   double *shape,*quat;
 
   AtomVecEllipsoid::Bonus *bonus = avec->bonus;
@@ -73,6 +73,7 @@ void FixNVEAsphere::initial_integrate(int vflag)
   double **x = atom->x;
   double **v = atom->v;
   double **f = atom->f;
+  double **omega = atom->omega;
   double **angmom = atom->angmom;
   double **torque = atom->torque;
   double *rmass = atom->rmass;
@@ -81,6 +82,8 @@ void FixNVEAsphere::initial_integrate(int vflag)
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
 
   // set timestep here since dt may have changed or come via rRESPA
+
+  double dtfrotate = dtf / INERTIA;
 
   dtq = 0.5 * dtv;
 
@@ -112,9 +115,14 @@ void FixNVEAsphere::initial_integrate(int vflag)
       // compute omega at 1/2 step from angmom at 1/2 step and current q
       // update quaternion a full step via Richardson iteration
       // returns new normalized quaternion
+        
+      dtirotate = dtfrotate / (rmass[i] * (shape[1]*shape[1]+shape[2]*shape[2]));
+      omega[i][0] += dtirotate * torque[i][0];
+      omega[i][1] += dtirotate * torque[i][1];
+      omega[i][2] += dtirotate * torque[i][2];
 
-      MathExtra::mq_to_omega(angmom[i],quat,inertia,omega);
-      MathExtra::richardson(quat,angmom[i],omega,inertia,dtq);
+      //MathExtra::mq_to_omega(angmom[i],quat,inertia,omega);
+      MathExtra::richardson(quat,angmom[i],omega[i],inertia,dtq);
     }
 }
 
@@ -122,10 +130,13 @@ void FixNVEAsphere::initial_integrate(int vflag)
 
 void FixNVEAsphere::final_integrate()
 {
-  double dtfm;
+  double dtfm,dtirotate;
 
+  AtomVecEllipsoid::Bonus *bonus = avec->bonus;
+  int *ellipsoid = atom->ellipsoid;
   double **v = atom->v;
   double **f = atom->f;
+  double **omega = atom->omega;
   double **angmom = atom->angmom;
   double **torque = atom->torque;
   double *rmass = atom->rmass;
@@ -133,13 +144,25 @@ void FixNVEAsphere::final_integrate()
   int nlocal = atom->nlocal;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
 
+  double dtfrotate = dtf / INERTIA;
+    
+  double *shape;
+  double rke = 00;
   for (int i = 0; i < nlocal; i++)
     if (mask[i] & groupbit) {
+      shape = bonus[ellipsoid[i]].shape;
       dtfm = dtf / rmass[i];
       v[i][0] += dtfm * f[i][0];
       v[i][1] += dtfm * f[i][1];
       v[i][2] += dtfm * f[i][2];
-
+        
+      dtirotate = dtfrotate / (rmass[i] * (shape[1]*shape[1]+shape[2]*shape[2]));
+      omega[i][0] += dtirotate * torque[i][0];
+      omega[i][1] += dtirotate * torque[i][1];
+      omega[i][2] += dtirotate * torque[i][2];
+      rke += (omega[i][0]*omega[i][0] + omega[i][1]*omega[i][1] +
+              omega[i][2]*omega[i][2]) * rmass[i] * (shape[1]*shape[1]+shape[2]*shape[2]);
+        
       angmom[i][0] += dtf * torque[i][0];
       angmom[i][1] += dtf * torque[i][1];
       angmom[i][2] += dtf * torque[i][2];
